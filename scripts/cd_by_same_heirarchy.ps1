@@ -85,62 +85,148 @@ if ($null -eq $siblingDirs -or $siblingDirs.Count -eq 0) {
     exit 0
 }
 
-# 3 - 3 select the directory to go to
-Write-Host "`nAvailable directories:" -ForegroundColor Yellow
+# Prepare directory list for GUI
 $dirList = @()
-$index = 1
 foreach ($dir in $siblingDirs) {
     $targetPath = Join-Path $dir.FullName $folderPath4SameHierarchy
     $exists = Test-Path -Path $targetPath -PathType Container
-    $status = if ($exists) { "[EXISTS]" } else { "[NOT FOUND]" }
-    Write-Host "$index. $($dir.Name) $status" -ForegroundColor $(if ($exists) { "Green" } else { "Gray" })
-    $dirList += @{
-        Index      = $index
+    $dirList += [PSCustomObject]@{
         Name       = $dir.Name
         FullPath   = $dir.FullName
         TargetPath = $targetPath
+        Status     = if ($exists) { "EXISTS" } else { "NOT FOUND" }
         Exists     = $exists
     }
-    $index++
 }
 
-Write-Host "`nSelect directory number (or press Enter to exit):" -ForegroundColor Yellow
-$selection = Read-Host
+# 3 - 3 select the directory to go to (GUI)
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
-if ([string]::IsNullOrWhiteSpace($selection)) {
+# Create form
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Select Directory - Same Hierarchy Navigator"
+$form.Size = New-Object System.Drawing.Size(900, 600)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedDialog"
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+
+# Create label for hierarchy info
+$labelInfo = New-Object System.Windows.Forms.Label
+$labelInfo.Location = New-Object System.Drawing.Point(10, 10)
+$labelInfo.Size = New-Object System.Drawing.Size(860, 40)
+$labelInfo.Text = "Hierarchy Structure: $folderPath4SameHierarchy`nSearching in: $grandParentPath"
+$labelInfo.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+$form.Controls.Add($labelInfo)
+
+# Create ListView
+$listView = New-Object System.Windows.Forms.ListView
+$listView.Location = New-Object System.Drawing.Point(10, 55)
+$listView.Size = New-Object System.Drawing.Size(860, 450)
+$listView.View = [System.Windows.Forms.View]::Details
+$listView.FullRowSelect = $true
+$listView.GridLines = $true
+$listView.MultiSelect = $false
+$listView.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+
+# Add columns
+$listView.Columns.Add("Name", 200) | Out-Null
+$listView.Columns.Add("Full Path", 400) | Out-Null
+$listView.Columns.Add("Target Path", 400) | Out-Null
+$listView.Columns.Add("Status", 100) | Out-Null
+
+# Add items to ListView
+foreach ($dir in $dirList) {
+    $item = New-Object System.Windows.Forms.ListViewItem($dir.Name)
+    $item.SubItems.Add($dir.FullPath) | Out-Null
+    $item.SubItems.Add($dir.TargetPath) | Out-Null
+    $item.SubItems.Add($dir.Status) | Out-Null
+    
+    # Color code: Green for exists, Gray for not found
+    if ($dir.Exists) {
+        $item.ForeColor = [System.Drawing.Color]::DarkGreen
+    }
+    else {
+        $item.ForeColor = [System.Drawing.Color]::Gray
+    }
+    
+    $listView.Items.Add($item) | Out-Null
+}
+
+$form.Controls.Add($listView)
+
+# Create buttons
+$btnOK = New-Object System.Windows.Forms.Button
+$btnOK.Location = New-Object System.Drawing.Point(650, 515)
+$btnOK.Size = New-Object System.Drawing.Size(100, 30)
+$btnOK.Text = "OK"
+$btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+$btnOK.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9, [System.Drawing.FontStyle]::Bold)
+$form.AcceptButton = $btnOK
+$form.Controls.Add($btnOK)
+
+$btnCancel = New-Object System.Windows.Forms.Button
+$btnCancel.Location = New-Object System.Drawing.Point(760, 515)
+$btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+$btnCancel.Text = "Cancel"
+$btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+$btnCancel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+$form.Controls.Add($btnCancel)
+
+# Double-click to select
+$listView.Add_DoubleClick({
+    $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Close()
+})
+
+# Show form
+$result = $form.ShowDialog()
+
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    if ($listView.SelectedItems.Count -gt 0) {
+        $selectedIndex = $listView.SelectedItems[0].Index
+        $selectedDir = $dirList[$selectedIndex]
+    }
+    else {
+        Write-Host "No directory selected. Cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+}
+else {
     Write-Host "Cancelled." -ForegroundColor Yellow
     exit 0
 }
-
-try {
-    $selectedIndex = [int]$selection
-    if ($selectedIndex -lt 1 -or $selectedIndex -gt $dirList.Count) {
-        Write-Host "Error: Invalid selection." -ForegroundColor Red
-        exit 1
-    }
-}
-catch {
-    Write-Host "Error: Invalid number." -ForegroundColor Red
-    exit 1
-}
-
-$selectedDir = $dirList[$selectedIndex - 1]
 
 # 4 - 1 go to the directory
 $finalPath = $selectedDir.TargetPath
 
 # 4 - 2 error handling: if the directory does not exist, show a message and exit
 if (-not $selectedDir.Exists) {
-    Write-Host "`nWarning: Target directory does not exist: $finalPath" -ForegroundColor Yellow
-    Write-Host "Do you want to create it? (Y/N)" -ForegroundColor Yellow
-    $create = Read-Host
-    if ($create -eq "Y" -or $create -eq "y") {
+    $msgResult = [System.Windows.Forms.MessageBox]::Show(
+        "Target directory does not exist:`n`n$finalPath`n`nDo you want to create it?",
+        "Directory Not Found",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    
+    if ($msgResult -eq [System.Windows.Forms.DialogResult]::Yes) {
         try {
             New-Item -Path $finalPath -ItemType Directory -Force | Out-Null
-            Write-Host "Directory created successfully." -ForegroundColor Green
+            [System.Windows.Forms.MessageBox]::Show(
+                "Directory created successfully!",
+                "Success",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            ) | Out-Null
         }
         catch {
-            Write-Host "Error: Failed to create directory. $_" -ForegroundColor Red
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error: Failed to create directory.`n`n$_",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
             exit 1
         }
     }
