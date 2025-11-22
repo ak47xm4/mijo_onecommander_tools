@@ -103,10 +103,14 @@ foreach ($dir in $siblingDirs) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# 視窗寬度變數（Window width variable）
+[int]$windowWidth = 1280
+
+
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Select Directory - Same Hierarchy Navigator"
-$form.Size = New-Object System.Drawing.Size(900, 600)
+$form.Size = New-Object System.Drawing.Size($windowWidth, 600)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -115,7 +119,7 @@ $form.MinimizeBox = $false
 # Create label for hierarchy info
 $labelInfo = New-Object System.Windows.Forms.Label
 $labelInfo.Location = New-Object System.Drawing.Point(10, 10)
-$labelInfo.Size = New-Object System.Drawing.Size(860, 40)
+$labelInfo.Size = New-Object System.Drawing.Size([int]($windowWidth - 20), 40)
 $labelInfo.Text = "Hierarchy Structure: $folderPath4SameHierarchy`nSearching in: $grandParentPath"
 $labelInfo.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 $form.Controls.Add($labelInfo)
@@ -123,7 +127,7 @@ $form.Controls.Add($labelInfo)
 # Create ListView
 $listView = New-Object System.Windows.Forms.ListView
 $listView.Location = New-Object System.Drawing.Point(10, 55)
-$listView.Size = New-Object System.Drawing.Size(860, 450)
+$listView.Size = New-Object System.Drawing.Size([int]($windowWidth - 20), 450)
 $listView.View = [System.Windows.Forms.View]::Details
 $listView.FullRowSelect = $true
 $listView.GridLines = $true
@@ -131,17 +135,17 @@ $listView.MultiSelect = $false
 $listView.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 
 # Add columns
-$listView.Columns.Add("Name", 200) | Out-Null
+$listView.Columns.Add("Name", 150) | Out-Null
 $listView.Columns.Add("Full Path", 400) | Out-Null
 $listView.Columns.Add("Target Path", 400) | Out-Null
-$listView.Columns.Add("Status", 100) | Out-Null
+# $listView.Columns.Add("Status", 100) | Out-Null
 
 # Add items to ListView
 foreach ($dir in $dirList) {
     $item = New-Object System.Windows.Forms.ListViewItem($dir.Name)
     $item.SubItems.Add($dir.FullPath) | Out-Null
     $item.SubItems.Add($dir.TargetPath) | Out-Null
-    $item.SubItems.Add($dir.Status) | Out-Null
+    # $item.SubItems.Add($dir.Status) | Out-Null
     
     # Color code: Green for exists, Gray for not found
     if ($dir.Exists) {
