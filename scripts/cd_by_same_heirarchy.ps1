@@ -156,15 +156,33 @@ foreach ($dir in $dirList) {
 
 $form.Controls.Add($listView)
 
+# Variable to track if new tab was selected
+$script:openInNewTab = $false
+
 # Create buttons
 $btnOK = New-Object System.Windows.Forms.Button
-$btnOK.Location = New-Object System.Drawing.Point(650, 515)
+$btnOK.Location = New-Object System.Drawing.Point(540, 515)
 $btnOK.Size = New-Object System.Drawing.Size(100, 30)
 $btnOK.Text = "OK"
-$btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
 $btnOK.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9, [System.Drawing.FontStyle]::Bold)
-$form.AcceptButton = $btnOK
+$btnOK.Add_Click({
+    $script:openInNewTab = $false
+    $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Close()
+})
 $form.Controls.Add($btnOK)
+
+$btnNewTab = New-Object System.Windows.Forms.Button
+$btnNewTab.Location = New-Object System.Drawing.Point(650, 515)
+$btnNewTab.Size = New-Object System.Drawing.Size(100, 30)
+$btnNewTab.Text = "New Tab"
+$btnNewTab.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+$btnNewTab.Add_Click({
+    $script:openInNewTab = $true
+    $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Close()
+})
+$form.Controls.Add($btnNewTab)
 
 $btnCancel = New-Object System.Windows.Forms.Button
 $btnCancel.Location = New-Object System.Drawing.Point(760, 515)
@@ -174,8 +192,9 @@ $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
 $btnCancel.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 $form.Controls.Add($btnCancel)
 
-# Double-click to select
+# Double-click to select (opens in current tab)
 $listView.Add_DoubleClick({
+    $script:openInNewTab = $false
     $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Close()
 })
@@ -236,8 +255,14 @@ if (-not $selectedDir.Exists) {
     }
 }
 
-# 5 - 1 command: oc "final_path"
-Write-Host "`nNavigating to: $finalPath" -ForegroundColor Green
-& oc $finalPath
+# 5 - 1 command: oc "final_path" or oc "final_path" -newtab
+if ($script:openInNewTab) {
+    Write-Host "`nOpening in new tab: $finalPath" -ForegroundColor Green
+    & oc $finalPath -newtab
+}
+else {
+    Write-Host "`nNavigating to: $finalPath" -ForegroundColor Green
+    & oc $finalPath
+}
 
 # code end
