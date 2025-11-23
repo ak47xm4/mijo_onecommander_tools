@@ -1,0 +1,16 @@
+F:.
+\---EP01
+    +---VFX_scene_0001
+    |   +---VFX_scene_0001_A
+    |   |   \---CC
+    |   +---VFX_scene_0001_B
+    |   |   \---CC
+    |   \---VFX_scene_0001_C
+    |       \---CC
+    \---VFX_scene_0002
+        +---VFX_scene_0002_A
+        |   \---CC
+        +---VFX_scene_0002_B
+        |   \---CC
+        \---VFX_scene_0002_C
+            \---CC
