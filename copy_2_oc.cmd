@@ -2,4 +2,4 @@
 
 cd /d %~dp0
 
-xcopy /y scripts\* "%localappdata%\OneCommander\Resources\Scripts\"
+xcopy /d /y scripts\* "C:\Users\Administrator\AppData\Local\OneCommander\Resources\Scripts\"
