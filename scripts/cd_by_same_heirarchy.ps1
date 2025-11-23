@@ -59,6 +59,7 @@ function Load-Config {
                 return @{
                     LevelsUp = 1
                     SubLevels = 0
+                    ColumnWidths = @(150, 400, 400, 100)
                 }
             }
             
@@ -67,6 +68,7 @@ function Load-Config {
             # Validate and sanitize values
             $levelsUp = 1
             $subLevels = 0
+            $columnWidths = @(150, 400, 400, 100)  # Default column widths: Name, Full Path, Target Path, Status
             
             if ($config.LevelsUp) {
                 try {
@@ -96,9 +98,34 @@ function Load-Config {
                 }
             }
             
+            # Load column widths if available
+            if ($config.ColumnWidths) {
+                try {
+                    $loadedWidths = @()
+                    if ($config.ColumnWidths -is [System.Array]) {
+                        foreach ($width in $config.ColumnWidths) {
+                            $w = [int]$width
+                            if ($w -gt 0 -and $w -lt 10000) {
+                                $loadedWidths += $w
+                            }
+                            else {
+                                throw "Invalid width value: $w"
+                            }
+                        }
+                        if ($loadedWidths.Count -eq 4) {
+                            $columnWidths = $loadedWidths
+                        }
+                    }
+                }
+                catch {
+                    Write-Host "Warning: Invalid ColumnWidths format. Using defaults." -ForegroundColor Yellow
+                }
+            }
+            
             return @{
                 LevelsUp = $levelsUp
                 SubLevels = $subLevels
+                ColumnWidths = $columnWidths
             }
         }
         catch {
@@ -106,12 +133,14 @@ function Load-Config {
             return @{
                 LevelsUp = 1
                 SubLevels = 0
+                ColumnWidths = @(150, 400, 400, 100)
             }
         }
     }
     return @{
         LevelsUp = 1
         SubLevels = 0
+        ColumnWidths = @(150, 400, 400, 100)
     }
 }
 
@@ -119,7 +148,8 @@ function Load-Config {
 function Save-Config {
     param(
         [int]$levelsUp,
-        [int]$subLevels
+        [int]$subLevels,
+        [int[]]$columnWidths = $null
     )
     
     # Validate input values
@@ -131,6 +161,25 @@ function Save-Config {
     if ($subLevels -lt 0 -or $subLevels -gt 10) {
         Write-Host "Error: SubLevels must be between 0 and 10." -ForegroundColor Red
         return $false
+    }
+    
+    # Validate column widths if provided
+    if ($null -ne $columnWidths) {
+        if ($columnWidths.Count -ne 4) {
+            Write-Host "Warning: ColumnWidths should have 4 values. Using provided values or defaults." -ForegroundColor Yellow
+        }
+        foreach ($width in $columnWidths) {
+            if ($width -le 0 -or $width -ge 10000) {
+                Write-Host "Warning: Invalid column width ($width). Using defaults." -ForegroundColor Yellow
+                $columnWidths = $null
+                break
+            }
+        }
+    }
+    
+    # Use default column widths if not provided or invalid
+    if ($null -eq $columnWidths -or $columnWidths.Count -ne 4) {
+        $columnWidths = @(150, 400, 400, 100)
     }
     
     # Ensure directory exists
@@ -148,6 +197,7 @@ function Save-Config {
         $config = @{
             LevelsUp = $levelsUp
             SubLevels = $subLevels
+            ColumnWidths = $columnWidths
         } | ConvertTo-Json -ErrorAction Stop
         
         Set-Content -Path $configFile -Value $config -Encoding UTF8 -ErrorAction Stop
@@ -509,6 +559,7 @@ try {
     $savedConfig = Load-Config
     $script:levelsUp = $savedConfig.LevelsUp
     $script:subLevels = $savedConfig.SubLevels
+    $script:columnWidths = $savedConfig.ColumnWidths
     
     # Validate loaded config
     if ($script:levelsUp -lt 1 -or $script:levelsUp -gt 20) {
@@ -519,6 +570,11 @@ try {
     if ($script:subLevels -lt 0 -or $script:subLevels -gt 10) {
         Write-Host "Warning: Invalid SubLevels in config ($script:subLevels). Using default (0)." -ForegroundColor Yellow
         $script:subLevels = 0
+    }
+    
+    # Validate column widths
+    if ($null -eq $script:columnWidths -or $script:columnWidths.Count -ne 4) {
+        $script:columnWidths = @(150, 400, 400, 100)
     }
     
     $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
@@ -634,7 +690,7 @@ $form.Controls.Add($btnRefresh)
 $btnSave = New-Object System.Windows.Forms.Button
 $btnSave.Location = New-Object System.Drawing.Point(500, 32)
 $btnSave.Size = New-Object System.Drawing.Size(120, 30)
-$btnSave.Text = "Save levels Config"
+$btnSave.Text = "Save GUI Config"
 $btnSave.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 $form.Controls.Add($btnSave)
 
@@ -656,11 +712,11 @@ $listView.GridLines = $true
 $listView.MultiSelect = $false
 $listView.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 
-# Add columns
-$listView.Columns.Add("Name", 150) | Out-Null
-$listView.Columns.Add("Full Path", 400) | Out-Null
-$listView.Columns.Add("Target Path", 400) | Out-Null
-$listView.Columns.Add("Status", 100) | Out-Null
+# Add columns with saved widths or defaults
+$listView.Columns.Add("Name", $script:columnWidths[0]) | Out-Null
+$listView.Columns.Add("Full Path", $script:columnWidths[1]) | Out-Null
+$listView.Columns.Add("Target Path", $script:columnWidths[2]) | Out-Null
+$listView.Columns.Add("Status", $script:columnWidths[3]) | Out-Null
 
 # Function to refresh the list
 function Refresh-ListView {
@@ -814,11 +870,18 @@ $btnSave.Add_Click({
         $currentLevelsUp = [int]$comboLevels.SelectedItem
         $currentSubLevels = [int]$comboSubLevels.SelectedItem
         
-        $success = Save-Config -levelsUp $currentLevelsUp -subLevels $currentSubLevels
+        # Get current column widths from ListView
+        $currentColumnWidths = @()
+        foreach ($column in $listView.Columns) {
+            $currentColumnWidths += $column.Width
+        }
+        
+        $success = Save-Config -levelsUp $currentLevelsUp -subLevels $currentSubLevels -columnWidths $currentColumnWidths
         
         if ($success) {
+            $columnWidthsInfo = "Column Widths: " + ($currentColumnWidths -join ", ")
             [System.Windows.Forms.MessageBox]::Show(
-                "Configuration saved successfully!`n`nLevels Up: $currentLevelsUp`nSub Levels: $currentSubLevels`n`nLocation: $configFile",
+                "Configuration saved successfully!`n`nLevels Up: $currentLevelsUp`nSub Levels: $currentSubLevels`n$columnWidthsInfo`n`nLocation: $configFile",
                 "Configuration Saved",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
