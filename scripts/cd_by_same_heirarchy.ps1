@@ -32,6 +32,60 @@ Write-Host "Current directory: $currentDir" -ForegroundColor Cyan
 # Store current directory for use in functions
 $script:currentDirForGUI = $currentDir
 
+# Configuration file path
+$configDir = Join-Path $env:USERPROFILE "Documents\mijo_oc_tools"
+$configFile = Join-Path $configDir "mijo_oc_tools_config.json"
+
+# Function to load configuration
+function Load-Config {
+    if (Test-Path -Path $configFile) {
+        try {
+            $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
+            return @{
+                LevelsUp = if ($config.LevelsUp) { [int]$config.LevelsUp } else { 1 }
+                SubLevels = if ($config.SubLevels) { [int]$config.SubLevels } else { 0 }
+            }
+        }
+        catch {
+            Write-Host "Warning: Failed to load config file. Using defaults." -ForegroundColor Yellow
+            return @{
+                LevelsUp = 1
+                SubLevels = 0
+            }
+        }
+    }
+    return @{
+        LevelsUp = 1
+        SubLevels = 0
+    }
+}
+
+# Function to save configuration
+function Save-Config {
+    param(
+        [int]$levelsUp,
+        [int]$subLevels
+    )
+    
+    # Ensure directory exists
+    if (-not (Test-Path -Path $configDir)) {
+        New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+    }
+    
+    try {
+        $config = @{
+            LevelsUp = $levelsUp
+            SubLevels = $subLevels
+        } | ConvertTo-Json
+        
+        Set-Content -Path $configFile -Value $config -Encoding UTF8
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 # Function to calculate paths based on levels up
 function Calculate-Paths {
     param([int]$levelsUp, [int]$subLevels = 0)
@@ -226,9 +280,10 @@ function Calculate-Paths {
     }
 }
 
-# Initialize with default level 1 and sub level 0
-$script:levelsUp = 1
-$script:subLevels = 0
+# Initialize with saved config or defaults
+$savedConfig = Load-Config
+$script:levelsUp = $savedConfig.LevelsUp
+$script:subLevels = $savedConfig.SubLevels
 $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
 
 if ($null -eq $pathData -or -not $pathData.Success) {
@@ -319,6 +374,13 @@ $btnRefresh.Size = New-Object System.Drawing.Size(90, 30)
 $btnRefresh.Text = "Refresh"
 $btnRefresh.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
 $form.Controls.Add($btnRefresh)
+
+$btnSave = New-Object System.Windows.Forms.Button
+$btnSave.Location = New-Object System.Drawing.Point(500, 32)
+$btnSave.Size = New-Object System.Drawing.Size(120, 30)
+$btnSave.Text = "Save levels Config"
+$btnSave.Font = New-Object System.Drawing.Font("Microsoft Sans Serif", 9)
+$form.Controls.Add($btnSave)
 
 # Create label for hierarchy info
 $labelInfo = New-Object System.Windows.Forms.Label
@@ -413,7 +475,32 @@ $btnRefresh.Add_Click({
         $script:dirList = $pathData.DirList
     
         Refresh-ListView -listView $listView -dirList $script:dirList -labelInfo $labelInfo -grandParentPath $script:grandParentPath -folderPath4SameHierarchy $script:folderPath4SameHierarchy
-    })
+})
+
+# Save button click handler
+$btnSave.Add_Click({
+    $currentLevelsUp = [int]$comboLevels.SelectedItem
+    $currentSubLevels = [int]$comboSubLevels.SelectedItem
+    
+    $success = Save-Config -levelsUp $currentLevelsUp -subLevels $currentSubLevels
+    
+    if ($success) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Configuration saved successfully!`n`nLevels Up: $currentLevelsUp`nSub Levels: $currentSubLevels",
+            "Configuration Saved",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    }
+    else {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to save configuration.`n`nPlease check if you have write permissions to:`n$configFile",
+            "Save Failed",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+})
 
 # Store variables in script scope for refresh functionality
 $script:parentPath = $parentPath
