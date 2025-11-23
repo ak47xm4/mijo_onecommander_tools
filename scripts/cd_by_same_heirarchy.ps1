@@ -26,7 +26,20 @@ if (-not $env:CURRENT_DIR) {
     exit 1
 }
 
-$currentDir = $env:CURRENT_DIR
+$currentDir = $env:CURRENT_DIR.Trim()
+
+# Validate current directory
+if ([string]::IsNullOrWhiteSpace($currentDir)) {
+    Write-Host "Error: CURRENT_DIR is empty." -ForegroundColor Red
+    exit 1
+}
+
+# Check if current directory exists
+if (-not (Test-Path -Path $currentDir -PathType Container)) {
+    Write-Host "Error: Current directory does not exist: $currentDir" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Current directory: $currentDir" -ForegroundColor Cyan
 
 # Store current directory for use in functions
@@ -40,14 +53,56 @@ $configFile = Join-Path $configDir "mijo_oc_tools_config.json"
 function Load-Config {
     if (Test-Path -Path $configFile) {
         try {
-            $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
+            $configContent = Get-Content -Path $configFile -Raw -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace($configContent)) {
+                Write-Host "Warning: Config file is empty. Using defaults." -ForegroundColor Yellow
+                return @{
+                    LevelsUp = 1
+                    SubLevels = 0
+                }
+            }
+            
+            $config = $configContent | ConvertFrom-Json -ErrorAction Stop
+            
+            # Validate and sanitize values
+            $levelsUp = 1
+            $subLevels = 0
+            
+            if ($config.LevelsUp) {
+                try {
+                    $levelsUp = [int]$config.LevelsUp
+                    if ($levelsUp -lt 1 -or $levelsUp -gt 20) {
+                        Write-Host "Warning: Invalid LevelsUp value ($levelsUp). Using default (1)." -ForegroundColor Yellow
+                        $levelsUp = 1
+                    }
+                }
+                catch {
+                    Write-Host "Warning: Invalid LevelsUp format. Using default (1)." -ForegroundColor Yellow
+                    $levelsUp = 1
+                }
+            }
+            
+            if ($config.SubLevels) {
+                try {
+                    $subLevels = [int]$config.SubLevels
+                    if ($subLevels -lt 0 -or $subLevels -gt 10) {
+                        Write-Host "Warning: Invalid SubLevels value ($subLevels). Using default (0)." -ForegroundColor Yellow
+                        $subLevels = 0
+                    }
+                }
+                catch {
+                    Write-Host "Warning: Invalid SubLevels format. Using default (0)." -ForegroundColor Yellow
+                    $subLevels = 0
+                }
+            }
+            
             return @{
-                LevelsUp = if ($config.LevelsUp) { [int]$config.LevelsUp } else { 1 }
-                SubLevels = if ($config.SubLevels) { [int]$config.SubLevels } else { 0 }
+                LevelsUp = $levelsUp
+                SubLevels = $subLevels
             }
         }
         catch {
-            Write-Host "Warning: Failed to load config file. Using defaults." -ForegroundColor Yellow
+            Write-Host "Warning: Failed to load config file ($($_.Exception.Message)). Using defaults." -ForegroundColor Yellow
             return @{
                 LevelsUp = 1
                 SubLevels = 0
@@ -67,21 +122,39 @@ function Save-Config {
         [int]$subLevels
     )
     
+    # Validate input values
+    if ($levelsUp -lt 1 -or $levelsUp -gt 20) {
+        Write-Host "Error: LevelsUp must be between 1 and 20." -ForegroundColor Red
+        return $false
+    }
+    
+    if ($subLevels -lt 0 -or $subLevels -gt 10) {
+        Write-Host "Error: SubLevels must be between 0 and 10." -ForegroundColor Red
+        return $false
+    }
+    
     # Ensure directory exists
-    if (-not (Test-Path -Path $configDir)) {
-        New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+    try {
+        if (-not (Test-Path -Path $configDir)) {
+            $null = New-Item -Path $configDir -ItemType Directory -Force -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-Host "Error: Cannot create config directory: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
     
     try {
         $config = @{
             LevelsUp = $levelsUp
             SubLevels = $subLevels
-        } | ConvertTo-Json
+        } | ConvertTo-Json -ErrorAction Stop
         
-        Set-Content -Path $configFile -Value $config -Encoding UTF8
+        Set-Content -Path $configFile -Value $config -Encoding UTF8 -ErrorAction Stop
         return $true
     }
     catch {
+        Write-Host "Error: Failed to save config: $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
@@ -92,6 +165,21 @@ function Calculate-Paths {
     
     $currentDirToUse = $script:currentDirForGUI
     
+    # Validate input parameters
+    if ($levelsUp -lt 1 -or $levelsUp -gt 20) {
+        return @{
+            Success = $false
+            Message = "LevelsUp must be between 1 and 20."
+        }
+    }
+    
+    if ($subLevels -lt 0 -or $subLevels -gt 10) {
+        return @{
+            Success = $false
+            Message = "SubLevels must be between 0 and 10."
+        }
+    }
+    
     # Validate current directory
     if ([string]::IsNullOrWhiteSpace($currentDirToUse)) {
         return @{
@@ -100,62 +188,180 @@ function Calculate-Paths {
         }
     }
     
+    # Normalize path
+    try {
+        $currentDirToUse = [System.IO.Path]::GetFullPath($currentDirToUse)
+    }
+    catch {
+        return @{
+            Success = $false
+            Message = "Invalid path format: $($_.Exception.Message)"
+        }
+    }
+    
     # Navigate up the specified levels
     $parentPath = $currentDirToUse
+    $levelsNavigated = 0
+    
     for ($i = 0; $i -lt $levelsUp; $i++) {
         if ([string]::IsNullOrWhiteSpace($parentPath)) {
             return @{
                 Success = $false
-                Message = "Cannot go up $levelsUp levels from current directory."
+                Message = "Cannot go up $levelsUp levels. Only reached $levelsNavigated level(s)."
             }
         }
-        $newPath = Split-Path -Path $parentPath -Parent
-        if ([string]::IsNullOrWhiteSpace($newPath)) {
+        
+        try {
+            $newPath = Split-Path -Path $parentPath -Parent -ErrorAction Stop
+        }
+        catch {
             return @{
                 Success = $false
-                Message = "Cannot go up $levelsUp levels from current directory."
+                Message = "Error navigating up: $($_.Exception.Message)"
             }
         }
+        
+        if ([string]::IsNullOrWhiteSpace($newPath) -or $newPath -eq $parentPath) {
+            return @{
+                Success = $false
+                Message = "Cannot go up $levelsUp levels. Reached root at level $levelsNavigated."
+            }
+        }
+        
         $parentPath = $newPath
+        $levelsNavigated++
+    }
+    
+    # Validate parent path exists
+    if (-not (Test-Path -Path $parentPath -PathType Container)) {
+        return @{
+            Success = $false
+            Message = "Parent path does not exist: $parentPath"
+        }
     }
     
     # Save the folder hierarchy structure (from parent path)
-    $folderPath4SameHierarchy = $currentDirToUse.Substring($parentPath.Length).TrimStart('\')
+    try {
+        if ($currentDirToUse.Length -le $parentPath.Length) {
+            return @{
+                Success = $false
+                Message = "Invalid path calculation. Current directory path is shorter than parent path."
+            }
+        }
+        $folderPath4SameHierarchy = $currentDirToUse.Substring($parentPath.Length).TrimStart('\', '/')
+    }
+    catch {
+        return @{
+            Success = $false
+            Message = "Error calculating hierarchy structure: $($_.Exception.Message)"
+        }
+    }
     
     # Split the hierarchy structure to get the part after subLevels
-    $hierarchyParts = $folderPath4SameHierarchy -split '\\'
+    $hierarchyParts = $folderPath4SameHierarchy -split '[\\/]' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    
     if ($subLevels -gt 0 -and $hierarchyParts.Count -gt $subLevels) {
         # Get the remaining path after subLevels
         $remainingPath = ($hierarchyParts[$subLevels..($hierarchyParts.Count - 1)] -join '\')
+    }
+    elseif ($subLevels -gt 0 -and $hierarchyParts.Count -le $subLevels) {
+        return @{
+            Success = $false
+            Message = "SubLevels ($subLevels) exceeds available hierarchy levels ($($hierarchyParts.Count))."
+        }
     }
     else {
         $remainingPath = $folderPath4SameHierarchy
     }
     
     # Get the directories name
-    $baseDir = Split-Path -Path $parentPath -Leaf
+    try {
+        $baseDir = Split-Path -Path $parentPath -Leaf
+        if ([string]::IsNullOrWhiteSpace($baseDir)) {
+            return @{
+                Success = $false
+                Message = "Cannot determine base directory name from path: $parentPath"
+            }
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Message = "Error getting base directory: $($_.Exception.Message)"
+        }
+    }
     
     # Get grand parent path
-    $grandParentPath = Split-Path -Path $parentPath -Parent
-    if ([string]::IsNullOrWhiteSpace($grandParentPath)) {
-        return $null
+    try {
+        $grandParentPath = Split-Path -Path $parentPath -Parent -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($grandParentPath)) {
+            return @{
+                Success = $false
+                Message = "Cannot determine grand parent path. Reached root directory."
+            }
+        }
+        
+        # Validate grand parent path exists
+        if (-not (Test-Path -Path $grandParentPath -PathType Container)) {
+            return @{
+                Success = $false
+                Message = "Grand parent path does not exist: $grandParentPath"
+            }
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Message = "Error getting grand parent path: $($_.Exception.Message)"
+        }
     }
     
     # Get all directories (including current directory) to list all scenes
-    $siblingDirs = Get-ChildItem -Path $grandParentPath -Directory -ErrorAction SilentlyContinue
+    try {
+        $siblingDirs = Get-ChildItem -Path $grandParentPath -Directory -ErrorAction Stop | Where-Object {
+            # Filter out system directories and ensure we can access them
+            try {
+                $null = $_.FullName
+                return $true
+            }
+            catch {
+                return $false
+            }
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Message = "Error accessing directories in $grandParentPath : $($_.Exception.Message)"
+        }
+    }
     
     if ($null -eq $siblingDirs -or $siblingDirs.Count -eq 0) {
         return @{
             Success = $false
-            Message = "No directories found."
+            Message = "No accessible directories found in: $grandParentPath"
         }
     }
     
     # Prepare directory list
     $dirList = @()
+    $errorCount = 0
+    $maxErrors = 10
+    
     foreach ($dir in $siblingDirs) {
-        # Start with the sibling directory
-        $baseTargetPath = $dir.FullName
+        try {
+            # Start with the sibling directory
+            $baseTargetPath = $dir.FullName
+            
+            # Validate base target path
+            if ([string]::IsNullOrWhiteSpace($baseTargetPath) -or -not (Test-Path -Path $baseTargetPath -PathType Container)) {
+                $errorCount++
+                if ($errorCount -ge $maxErrors) {
+                    Write-Host "Warning: Too many errors processing directories. Stopping." -ForegroundColor Yellow
+                    break
+                }
+                continue
+            }
         
         # Navigate down subLevels if specified
         if ($subLevels -gt 0 -and $hierarchyParts.Count -gt $subLevels) {
@@ -268,6 +474,24 @@ function Calculate-Paths {
                 Exists     = $exists
             }
         }
+        }
+        catch {
+            $errorCount++
+            Write-Host "Warning: Error processing directory $($dir.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+            if ($errorCount -ge $maxErrors) {
+                Write-Host "Too many errors. Stopping directory processing." -ForegroundColor Yellow
+                break
+            }
+            continue
+        }
+    }
+    
+    # Check if we have any valid directories
+    if ($dirList.Count -eq 0) {
+        return @{
+            Success = $false
+            Message = "No valid directories found after processing. There may be permission issues or invalid paths."
+        }
     }
     
     return @{
@@ -281,19 +505,51 @@ function Calculate-Paths {
 }
 
 # Initialize with saved config or defaults
-$savedConfig = Load-Config
-$script:levelsUp = $savedConfig.LevelsUp
-$script:subLevels = $savedConfig.SubLevels
-$pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
-
-if ($null -eq $pathData -or -not $pathData.Success) {
-    if ($pathData -and $pathData.Message) {
-        Write-Host $pathData.Message -ForegroundColor Yellow
+try {
+    $savedConfig = Load-Config
+    $script:levelsUp = $savedConfig.LevelsUp
+    $script:subLevels = $savedConfig.SubLevels
+    
+    # Validate loaded config
+    if ($script:levelsUp -lt 1 -or $script:levelsUp -gt 20) {
+        Write-Host "Warning: Invalid LevelsUp in config ($script:levelsUp). Using default (1)." -ForegroundColor Yellow
+        $script:levelsUp = 1
     }
-    else {
-        Write-Host "Error: Cannot calculate paths. Please check the directory structure." -ForegroundColor Red
+    
+    if ($script:subLevels -lt 0 -or $script:subLevels -gt 10) {
+        Write-Host "Warning: Invalid SubLevels in config ($script:subLevels). Using default (0)." -ForegroundColor Yellow
+        $script:subLevels = 0
     }
-    exit 0
+    
+    $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
+    
+    if ($null -eq $pathData -or -not $pathData.Success) {
+        if ($pathData -and $pathData.Message) {
+            Write-Host $pathData.Message -ForegroundColor Yellow
+            # Try with default values if initial calculation fails
+            if ($script:levelsUp -ne 1 -or $script:subLevels -ne 0) {
+                Write-Host "Trying with default values (LevelsUp=1, SubLevels=0)..." -ForegroundColor Yellow
+                $script:levelsUp = 1
+                $script:subLevels = 0
+                $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
+            }
+        }
+        
+        if ($null -eq $pathData -or -not $pathData.Success) {
+            if ($pathData -and $pathData.Message) {
+                Write-Host "Error: $($pathData.Message)" -ForegroundColor Red
+            }
+            else {
+                Write-Host "Error: Cannot calculate paths. Please check the directory structure." -ForegroundColor Red
+            }
+            exit 0
+        }
+    }
+}
+catch {
+    Write-Host "Error during initialization: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+    exit 1
 }
 
 $parentPath = $pathData.ParentPath
@@ -439,9 +695,63 @@ $form.Controls.Add($listView)
 
 # Refresh button click handler
 $btnRefresh.Add_Click({
-        $script:levelsUp = [int]$comboLevels.SelectedItem
-        $script:subLevels = [int]$comboSubLevels.SelectedItem
-        $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
+        try {
+            # Validate selections
+            if ($comboLevels.SelectedItem -eq $null) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Please select a value for Levels Up.",
+                    "Invalid Selection",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return
+            }
+            
+            if ($comboSubLevels.SelectedItem -eq $null) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Please select a value for Sub Levels.",
+                    "Invalid Selection",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return
+            }
+            
+            $script:levelsUp = [int]$comboLevels.SelectedItem
+            $script:subLevels = [int]$comboSubLevels.SelectedItem
+            
+            # Validate values
+            if ($script:levelsUp -lt 1 -or $script:levelsUp -gt 20) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Levels Up must be between 1 and 20.",
+                    "Invalid Value",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return
+            }
+            
+            if ($script:subLevels -lt 0 -or $script:subLevels -gt 10) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Sub Levels must be between 0 and 10.",
+                    "Invalid Value",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return
+            }
+            
+            $pathData = Calculate-Paths -levelsUp $script:levelsUp -subLevels $script:subLevels
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error processing selection: $($_.Exception.Message)",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+            return
+        }
     
         if ($null -eq $pathData -or -not $pathData.Success) {
             if ($pathData -and $pathData.Message) {
@@ -479,23 +789,54 @@ $btnRefresh.Add_Click({
 
 # Save button click handler
 $btnSave.Add_Click({
-    $currentLevelsUp = [int]$comboLevels.SelectedItem
-    $currentSubLevels = [int]$comboSubLevels.SelectedItem
-    
-    $success = Save-Config -levelsUp $currentLevelsUp -subLevels $currentSubLevels
-    
-    if ($success) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Configuration saved successfully!`n`nLevels Up: $currentLevelsUp`nSub Levels: $currentSubLevels",
-            "Configuration Saved",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        ) | Out-Null
+    try {
+        # Validate selections
+        if ($comboLevels.SelectedItem -eq $null) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Please select a value for Levels Up before saving.",
+                "Invalid Selection",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            ) | Out-Null
+            return
+        }
+        
+        if ($comboSubLevels.SelectedItem -eq $null) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Please select a value for Sub Levels before saving.",
+                "Invalid Selection",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            ) | Out-Null
+            return
+        }
+        
+        $currentLevelsUp = [int]$comboLevels.SelectedItem
+        $currentSubLevels = [int]$comboSubLevels.SelectedItem
+        
+        $success = Save-Config -levelsUp $currentLevelsUp -subLevels $currentSubLevels
+        
+        if ($success) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Configuration saved successfully!`n`nLevels Up: $currentLevelsUp`nSub Levels: $currentSubLevels`n`nLocation: $configFile",
+                "Configuration Saved",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            ) | Out-Null
+        }
+        else {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to save configuration.`n`nPlease check:`n- Write permissions to:`n  $configFile`n- Valid values (LevelsUp: 1-20, SubLevels: 0-10)",
+                "Save Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+        }
     }
-    else {
+    catch {
         [System.Windows.Forms.MessageBox]::Show(
-            "Failed to save configuration.`n`nPlease check if you have write permissions to:`n$configFile",
-            "Save Failed",
+            "Error saving configuration: $($_.Exception.Message)",
+            "Error",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
@@ -609,13 +950,40 @@ if (-not $selectedDir.Exists) {
 }
 
 # 5 - 1 command: oc "final_path" or oc "final_path" -newtab
-if ($script:openInNewTab) {
-    Write-Host "`nOpening in new tab: $finalPath" -ForegroundColor Green
-    & oc $finalPath -newtab
+try {
+    # Validate final path
+    if ([string]::IsNullOrWhiteSpace($finalPath)) {
+        Write-Host "Error: Final path is empty." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Normalize path
+    $finalPath = [System.IO.Path]::GetFullPath($finalPath)
+    
+    # Check if path exists (if it was supposed to exist)
+    if ($selectedDir.Exists -and -not (Test-Path -Path $finalPath -PathType Container)) {
+        Write-Host "Warning: Target path does not exist: $finalPath" -ForegroundColor Yellow
+    }
+    
+    if ($script:openInNewTab) {
+        Write-Host "`nOpening in new tab: $finalPath" -ForegroundColor Green
+        & oc $finalPath -newtab
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: OneCommander command returned error code $LASTEXITCODE" -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "`nNavigating to: $finalPath" -ForegroundColor Green
+        & oc $finalPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: OneCommander command returned error code $LASTEXITCODE" -ForegroundColor Yellow
+        }
+    }
 }
-else {
-    Write-Host "`nNavigating to: $finalPath" -ForegroundColor Green
-    & oc $finalPath
+catch {
+    Write-Host "Error executing OneCommander command: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Path: $finalPath" -ForegroundColor Red
+    exit 1
 }
 
 # code end
